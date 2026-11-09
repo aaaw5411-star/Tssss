@@ -1,0 +1,221 @@
+name: Build APK
+on:
+  push:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create project
+        run: |
+          mkdir -p proj/src/main/java/com/example/spacestyle proj/src/main/res/xml proj/src/main/res/values proj/src/main/res/drawable
+          cd proj
+          cat > settings.gradle.kts <<'EOF'
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement { repositories { google(); mavenCentral() } }
+          rootProject.name = "SpaceStyle"
+          EOF
+          cat > build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application") version "8.5.2"
+              id("org.jetbrains.kotlin.android") version "1.9.24"
+          }
+          android {
+              namespace = "com.example.spacestyle"
+              compileSdk = 34
+              defaultConfig {
+                  applicationId = "com.example.spacestyle"
+                  minSdk = 24
+                  targetSdk = 34
+                  versionCode = 1
+                  versionName = "1.0"
+              }
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+              kotlinOptions { jvmTarget = "17" }
+          }
+          EOF
+          cat > src/main/AndroidManifest.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <application
+                  android:label="تسطير"
+                  android:icon="@drawable/ic_launcher"
+                  android:theme="@android:style/Theme.Material.Light.NoActionBar">
+                  <activity android:name=".MainActivity" android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+                  <service
+                      android:name=".SpaceService"
+                      android:exported="false"
+                      android:label="تسطير"
+                      android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+                      <intent-filter>
+                          <action android:name="android.accessibilityservice.AccessibilityService" />
+                      </intent-filter>
+                      <meta-data
+                          android:name="android.accessibilityservice"
+                          android:resource="@xml/space_service_config" />
+                  </service>
+              </application>
+          </manifest>
+          EOF
+          cat > src/main/res/xml/space_service_config.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+              android:accessibilityEventTypes="typeViewTextChanged"
+              android:accessibilityFeedbackType="feedbackGeneric"
+              android:canRetrieveWindowContent="true"
+              android:notificationTimeout="50"
+              android:description="@string/service_desc" />
+          EOF
+          cat > src/main/res/values/strings.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <string name="service_desc">يحول المسافة إلى زخرفة عند تفعيل الزر داخل التطبيق</string>
+          </resources>
+          EOF
+          cat > src/main/java/com/example/spacestyle/MainActivity.kt <<'EOF'
+          package com.example.spacestyle
+
+          import android.app.Activity
+          import android.content.Intent
+          import android.os.Bundle
+          import android.provider.Settings
+          import android.view.Gravity
+          import android.view.View
+          import android.widget.Button
+          import android.widget.LinearLayout
+          import android.widget.Switch
+          import android.widget.TextView
+
+          class MainActivity : Activity() {
+              private lateinit var status: TextView
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  val prefs = getSharedPreferences("s", MODE_PRIVATE)
+                  val box = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      gravity = Gravity.CENTER
+                      setPadding(64, 64, 64, 64)
+                      layoutDirection = View.LAYOUT_DIRECTION_RTL
+                  }
+                  box.addView(TextView(this).apply {
+                      text = "〜 ♱ 〜 ♱"
+                      textSize = 28f
+                      gravity = Gravity.CENTER
+                  })
+                  status = TextView(this).apply {
+                      textSize = 16f
+                      gravity = Gravity.CENTER
+                      setPadding(0, 32, 0, 32)
+                  }
+                  box.addView(status)
+                  box.addView(Button(this).apply {
+                      text = "فتح إعدادات أدوات الوصول"
+                      setOnClickListener {
+                          startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                      }
+                  })
+                  box.addView(Switch(this).apply {
+                      text = "تفعيل التسطير"
+                      textSize = 20f
+                      setPadding(0, 48, 0, 0)
+                      isChecked = prefs.getBoolean("on", false)
+                      setOnCheckedChangeListener { _, checked ->
+                          prefs.edit().putBoolean("on", checked).apply()
+                      }
+                  })
+                  setContentView(box)
+              }
+
+              override fun onResume() {
+                  super.onResume()
+                  val list = Settings.Secure.getString(
+                      contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+                  )
+                  val enabled = list?.contains(packageName) == true
+                  status.text = if (enabled) "إمكانية الوصول: مفعّلة ✓" else "إمكانية الوصول: غير مفعّلة"
+              }
+          }
+          EOF
+          cat > src/main/java/com/example/spacestyle/SpaceService.kt <<'EOF'
+          package com.example.spacestyle
+
+          import android.accessibilityservice.AccessibilityService
+          import android.os.Bundle
+          import android.view.accessibility.AccessibilityEvent
+          import android.view.accessibility.AccessibilityNodeInfo
+
+          class SpaceService : AccessibilityService() {
+
+              private val sep = "\u200F〜 ♱ 〜 ♱ "
+
+              override fun onAccessibilityEvent(e: AccessibilityEvent) {
+                  if (e.eventType != AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED) return
+                  if (!getSharedPreferences("s", MODE_PRIVATE).getBoolean("on", false)) return
+                  val node = e.source ?: return
+                  if (!node.isEditable || node.isPassword) return
+                  val text = node.text?.toString() ?: return
+
+                  val i = e.fromIndex
+                  if (e.addedCount != 1 || e.removedCount != 0) return
+                  if (i < 0 || i >= text.length || text[i] != ' ') return
+
+                  val newText = text.substring(0, i) + sep + text.substring(i + 1)
+                  val setText = Bundle().apply {
+                      putCharSequence(
+                          AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, newText
+                      )
+                  }
+                  node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, setText)
+
+                  val pos = i + sep.length
+                  val setSel = Bundle().apply {
+                      putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, pos)
+                      putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, pos)
+                  }
+                  node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, setSel)
+              }
+
+              override fun onInterrupt() {}
+          }
+          EOF
+          cat > src/main/res/drawable/ic_launcher.xml <<'EOF'
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp"
+              android:height="108dp"
+              android:viewportWidth="108"
+              android:viewportHeight="108">
+              <path android:fillColor="#B71C1C" android:pathData="M0,0h108v108h-108z" />
+              <path android:fillColor="#FFFFFF" android:pathData="M50,20h8v68h-8z" />
+              <path android:fillColor="#FFFFFF" android:pathData="M38,32h32v8h-32z" />
+              <path android:fillColor="#FFFFFF" android:pathData="M42,52h24v8h-24z" />
+          </vector>
+          EOF
+          cd ..
+          if [ -f icon.png ]; then
+            rm proj/src/main/res/drawable/ic_launcher.xml
+            cp icon.png proj/src/main/res/drawable/ic_launcher.png
+          fi
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: 8.7
+      - name: Build
+        working-directory: proj
+        run: gradle assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SpaceStyle-apk
+          path: proj/build/outputs/apk/debug/*.apk
